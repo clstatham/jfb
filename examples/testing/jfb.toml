@@ -1,0 +1,26 @@
+[workspace]
+name = "testing"
+
+[build]
+build_dir = "build"
+opt_level = "0"
+c_compiler = "gcc"
+cpp_compiler = "g++"
+c_standard = "c11"
+cpp_standard = "c++11"
+linker = "gcc"
+debug = true
+warnings_as_errors = false
+warnings = ["all", "extra", "pedantic", "shadow", "format=2"]
+flags = [
+    "-fdiagnostics-color=always",
+    "-fstack-protector-strong",
+    "-Wno-unused-parameter",
+]
+defines = []
+
+[target.testbin]
+type = "executable"
+language = "c"
+source_dirs = ["src"]
+include_dirs = ["include"]
