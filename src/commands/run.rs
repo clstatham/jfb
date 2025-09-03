@@ -23,7 +23,7 @@ pub fn run(args: &Args, build_opts: &BuildOpts) -> anyhow::Result<()> {
         .find(|(_, t)| matches!(t.target_type, crate::config::TargetType::Executable))
         .ok_or_else(|| anyhow::anyhow!("No executable target found in configuration"))?;
 
-    let exe_path = build_dir.join(&executable_name).join(&executable_name);
+    let exe_path = build_dir.join(executable_name).join(executable_name);
     if !exe_path.exists() {
         return Err(anyhow::anyhow!(
             "Executable not found: {}",

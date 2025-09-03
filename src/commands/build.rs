@@ -50,23 +50,23 @@ pub fn build(args: &Args, _opts: &BuildOpts) -> Result<()> {
 
             let entries = sh.read_dir(src_dir)?;
             for entry in entries {
-                if entry.is_file() {
-                    if let Some(ext) = entry.extension() {
-                        match target_config.language {
-                            TargetLanguage::C if ext == "c" => {
-                                src_files.push(entry.clone());
-                                let obj_file =
-                                    out_dir.join(entry.with_extension("o").file_name().unwrap());
-                                obj_files.push(obj_file);
-                            }
-                            TargetLanguage::Cpp if ext == "cpp" || ext == "cc" || ext == "cxx" => {
-                                src_files.push(entry.clone());
-                                let obj_file =
-                                    out_dir.join(entry.with_extension("o").file_name().unwrap());
-                                obj_files.push(obj_file);
-                            }
-                            _ => {}
+                if entry.is_file()
+                    && let Some(ext) = entry.extension()
+                {
+                    match target_config.language {
+                        TargetLanguage::C if ext == "c" => {
+                            src_files.push(entry.clone());
+                            let obj_file =
+                                out_dir.join(entry.with_extension("o").file_name().unwrap());
+                            obj_files.push(obj_file);
                         }
+                        TargetLanguage::Cpp if ext == "cpp" || ext == "cc" || ext == "cxx" => {
+                            src_files.push(entry.clone());
+                            let obj_file =
+                                out_dir.join(entry.with_extension("o").file_name().unwrap());
+                            obj_files.push(obj_file);
+                        }
+                        _ => {}
                     }
                 }
             }
