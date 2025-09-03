@@ -1,9 +1,15 @@
+use std::{
+    collections::HashMap,
+    hash::{DefaultHasher, Hasher},
+    path::{Path, PathBuf},
+};
+
 use anyhow::Result;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use xshell::{Shell, cmd};
 
-use crate::config::{Args, Config, TargetLanguage, TargetType};
+use crate::config::{Args, Config, TargetConfig, TargetLanguage, TargetType};
 
 #[derive(Debug, Parser)]
 pub struct BuildOpts {}
@@ -17,49 +23,112 @@ pub struct CompileCommand {
 
 pub type CompileCommands = Vec<CompileCommand>;
 
-pub fn build(args: &Args, _opts: &BuildOpts) -> Result<()> {
-    let sh = Shell::new()?;
-    let base_dir = args
-        .opts
-        .config
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let base_dir = base_dir.canonicalize()?;
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct FileHashCache {
+    #[serde(flatten)]
+    cache: HashMap<PathBuf, u64>,
+}
 
-    let _guard = sh.push_dir(&base_dir);
-    log::debug!("Set working directory to: {}", base_dir.display());
+impl FileHashCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    let config = Config::load(&args.opts.config)?;
-    log::debug!("Loaded config: {:#?}", config);
-
-    let build_dir = base_dir.join(&config.build.build_dir);
-    sh.create_dir(&build_dir)?;
-    log::debug!("Using build directory: {}", build_dir.display());
-
-    let mut compile_commands = vec![];
-
-    // compile every target
-    for target in config.targets.iter() {
-        // skip static libraries for now
-        if target.target_type == TargetType::StaticLibrary {
-            log::info!("Skipping static library target: {}", target.name);
-            continue;
+    pub fn is_updated(&mut self, path: &Path) -> Result<bool> {
+        // get the hash of the file's contents
+        let mut hasher = DefaultHasher::new();
+        let content = std::fs::read(path)?;
+        hasher.write(&content);
+        let hash = hasher.finish();
+        let cached_hash = self.cache.get(path);
+        let is_updated = match cached_hash {
+            Some(cached) => *cached != hash,
+            None => true,
+        };
+        if is_updated {
+            self.cache.insert(path.to_path_buf(), hash);
         }
+        Ok(is_updated)
+    }
+}
+
+pub struct Builder<'a> {
+    config: &'a Config,
+    _opts: &'a BuildOpts,
+    sh: Shell,
+    base_dir: PathBuf,
+    compile_commands: CompileCommands,
+    file_cache: FileHashCache,
+}
+
+impl<'a> Builder<'a> {
+    pub fn new(config: &'a Config, opts: &'a BuildOpts, base_dir: &Path) -> Result<Self> {
+        let sh = Shell::new()?;
+        let compile_commands = CompileCommands::new();
+        let base_dir = base_dir.canonicalize()?;
+
+        let cache_path = base_dir
+            .join(&config.build.build_dir)
+            .join("jfb_cache.json");
+        let file_update_cache = if std::fs::exists(&cache_path)? {
+            let data = std::fs::read_to_string(cache_path)?;
+            serde_json::from_str(&data)?
+        } else {
+            FileHashCache::new()
+        };
+
+        Ok(Self {
+            config,
+            _opts: opts,
+            sh,
+            base_dir,
+            compile_commands,
+            file_cache: file_update_cache,
+        })
+    }
+
+    pub fn build(mut self) -> Result<()> {
+        let build_dir = self.base_dir.join(&self.config.build.build_dir);
+        self.sh.create_dir(&build_dir)?;
+        log::debug!("Using build directory: {}", build_dir.display());
+
+        // compile every target
+        for target in self.config.targets.iter() {
+            // skip static libraries for now
+            if target.target_type == TargetType::StaticLibrary {
+                log::info!("Skipping static library target: {}", target.name);
+                continue;
+            }
+
+            log::info!("Building target: {}", target.name);
+
+            self.compile_target(target, &build_dir)?;
+        }
+
+        if self.config.build.output_compile_commands {
+            self.write_build_artifacts()?;
+        }
+
+        log::info!("All targets built successfully.");
+
+        Ok(())
+    }
+
+    fn compile_target(&mut self, target: &TargetConfig, build_dir: &Path) -> Result<()> {
+        // create output directory for this target
+        let out_dir = build_dir.join(&target.name);
+        self.sh.create_dir(&out_dir)?;
+
+        let target_dir = self.base_dir.join(&target.name);
 
         let mut src_files = vec![];
         let mut obj_files = vec![];
 
-        log::info!("Building target: {}", target.name);
-
-        let target_dir = base_dir.join(&target.name);
-
-        let out_dir = build_dir.join(&target.name);
-        sh.create_dir(&out_dir)?;
-
+        // populate src_files and obj_files
         for src_dir in target.source_dirs.iter() {
             let src_dir = target_dir.join(src_dir);
 
-            let entries = sh.read_dir(src_dir)?;
+            let entries = self.sh.read_dir(src_dir)?;
             for entry in entries {
                 if entry.is_file()
                     && let Some(ext) = entry.extension()
@@ -83,137 +152,177 @@ pub fn build(args: &Args, _opts: &BuildOpts) -> Result<()> {
             }
         }
 
+        // compile our source files
         for (src, obj) in src_files.iter().zip(obj_files.iter()) {
-            let compiler = match target.language {
-                TargetLanguage::C => target
-                    .build_overrides
-                    .as_ref()
-                    .and_then(|overrides| overrides.c_compiler.as_ref())
-                    .unwrap_or(&config.build.c_compiler),
-                TargetLanguage::Cpp => target
-                    .build_overrides
-                    .as_ref()
-                    .and_then(|overrides| overrides.cpp_compiler.as_ref())
-                    .unwrap_or(&config.build.cpp_compiler),
-            };
-
-            let standard = match target.language {
-                TargetLanguage::C => target
-                    .build_overrides
-                    .as_ref()
-                    .and_then(|overrides| overrides.c_standard.as_ref())
-                    .unwrap_or(&config.build.c_standard),
-                TargetLanguage::Cpp => target
-                    .build_overrides
-                    .as_ref()
-                    .and_then(|overrides| overrides.cpp_standard.as_ref())
-                    .unwrap_or(&config.build.cpp_standard),
-            };
-            let standard_arg = format!("-std={standard}");
-
-            let include_dirs = target
-                .include_dirs
-                .iter()
-                .map(|dir| format!("-I{}", target_dir.join(dir).display()))
-                .collect::<Vec<_>>();
-
-            let defines = config
-                .build
-                .defines
-                .iter()
-                .map(|def| format!("-D{}", def))
-                .collect::<Vec<_>>();
-
-            let flags = config
-                .build
-                .flags
-                .iter()
-                .chain(
-                    target
-                        .build_overrides
-                        .as_ref()
-                        .and_then(|overrides| overrides.flags.as_ref())
-                        .unwrap_or(&vec![]),
-                )
-                .map(|flag| flag.to_string())
-                .collect::<Vec<_>>();
-
-            let opt_level = format!(
-                "-O{}",
-                target
-                    .build_overrides
-                    .as_ref()
-                    .and_then(|overrides| overrides.opt_level.as_ref())
-                    .unwrap_or(&config.build.opt_level)
-            );
-
-            let command = cmd!(sh, "{compiler}")
-                .arg(standard_arg)
-                .args(&flags)
-                .args(&defines)
-                .args(&include_dirs)
-                .arg(&opt_level)
-                .arg("-c")
-                .arg(src)
-                .arg("-o")
-                .arg(obj);
-
-            if config.build.output_compile_commands {
-                let command_str = command.to_string();
-                let args: Vec<String> = command_str
-                    .split_ascii_whitespace()
-                    .map(String::from)
-                    .collect();
-
-                let compile_command = CompileCommand {
-                    directory: base_dir.to_string_lossy().into_owned(),
-                    arguments: args,
-                    file: src.to_string_lossy().into_owned(),
-                };
-
-                compile_commands.push(compile_command);
+            // check if the file has been updated compared to our cached update time
+            if self.file_cache.is_updated(src)? {
+                self.compile_file(src, obj, &target_dir, target)?;
+            } else {
+                log::debug!("Skipping unchanged file: {}", src.display());
             }
-
-            command.run()?;
-
-            log::info!("Compiled {} to {}", src.display(), obj.display());
         }
 
-        // Link object files into the final executable
+        // link all object files into the final executable
         let output_exe = out_dir.join(&target.name);
+
         let linker = match target.language {
             TargetLanguage::C => target
                 .build_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.c_linker.as_ref())
-                .unwrap_or(&config.build.c_compiler),
+                .unwrap_or(&self.config.build.c_compiler),
             TargetLanguage::Cpp => target
                 .build_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.cpp_linker.as_ref())
-                .unwrap_or(&config.build.cpp_compiler),
+                .unwrap_or(&self.config.build.cpp_compiler),
         };
 
-        cmd!(sh, "{linker}")
+        cmd!(self.sh, "{linker}")
             .args(&obj_files)
             .arg("-o")
             .arg(&output_exe)
             .run()?;
 
-        log::info!("Linked executable: {}", output_exe.display());
+        log::debug!("Linked executable: {}", output_exe.display());
+
+        Ok(())
     }
 
-    if config.build.output_compile_commands {
+    fn compile_file(
+        &mut self,
+        src: &Path,
+        obj: &Path,
+        target_dir: &Path,
+        target: &TargetConfig,
+    ) -> Result<()> {
+        let compiler = match target.language {
+            TargetLanguage::C => target
+                .build_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.c_compiler.as_ref())
+                .unwrap_or(&self.config.build.c_compiler),
+            TargetLanguage::Cpp => target
+                .build_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.cpp_compiler.as_ref())
+                .unwrap_or(&self.config.build.cpp_compiler),
+        };
+
+        let standard = match target.language {
+            TargetLanguage::C => target
+                .build_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.c_standard.as_ref())
+                .unwrap_or(&self.config.build.c_standard),
+            TargetLanguage::Cpp => target
+                .build_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.cpp_standard.as_ref())
+                .unwrap_or(&self.config.build.cpp_standard),
+        };
+        let standard_arg = format!("-std={standard}");
+
+        let include_dirs = target
+            .include_dirs
+            .iter()
+            .map(|dir| format!("-I{}", target_dir.join(dir).display()))
+            .collect::<Vec<_>>();
+
+        let defines = self
+            .config
+            .build
+            .defines
+            .iter()
+            .map(|def| format!("-D{}", def))
+            .collect::<Vec<_>>();
+
+        let flags = self
+            .config
+            .build
+            .flags
+            .iter()
+            .chain(
+                target
+                    .build_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.flags.as_ref())
+                    .unwrap_or(&vec![]),
+            )
+            .map(|flag| flag.to_string())
+            .collect::<Vec<_>>();
+
+        let opt_level = format!(
+            "-O{}",
+            target
+                .build_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.opt_level.as_ref())
+                .unwrap_or(&self.config.build.opt_level)
+        );
+
+        let command = cmd!(self.sh, "{compiler}")
+            .arg(standard_arg)
+            .args(&flags)
+            .args(&defines)
+            .args(&include_dirs)
+            .arg(&opt_level)
+            .arg("-c")
+            .arg(src)
+            .arg("-o")
+            .arg(obj);
+
+        if self.config.build.output_compile_commands {
+            let command_str = command.to_string();
+            let args: Vec<_> = command_str.split_whitespace().map(String::from).collect();
+
+            let compile_command = CompileCommand {
+                directory: self.base_dir.to_string_lossy().into_owned(),
+                arguments: args,
+                file: src.to_string_lossy().into_owned(),
+            };
+
+            self.compile_commands.push(compile_command);
+        }
+
+        command.run()?;
+
+        log::info!("Compiled {} to {}", src.display(), obj.display());
+
+        Ok(())
+    }
+
+    fn write_build_artifacts(&self) -> Result<()> {
+        let build_dir = self.base_dir.join(&self.config.build.build_dir);
         let compile_commands_path = build_dir.join("compile_commands.json");
-        let json = serde_json::to_string_pretty(&compile_commands)?;
-        sh.write_file(&compile_commands_path, json)?;
-        log::info!(
+        let json = serde_json::to_string_pretty(&self.compile_commands)?;
+        self.sh.write_file(&compile_commands_path, json)?;
+        log::debug!(
             "Wrote compile commands to {}",
             compile_commands_path.display()
         );
-    }
 
-    log::info!("All targets built successfully.");
+        let file_update_cache_json = serde_json::to_string_pretty(&self.file_cache)?;
+        let cache_path = build_dir.join("jfb_cache.json");
+        self.sh.write_file(&cache_path, file_update_cache_json)?;
+        log::debug!("Wrote file cache to {}", cache_path.display());
+
+        Ok(())
+    }
+}
+
+pub fn build(args: &Args, opts: &BuildOpts) -> Result<()> {
+    let base_dir = args
+        .opts
+        .config
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let base_dir = base_dir.canonicalize()?;
+
+    let config = Config::load(&args.opts.config)?;
+    log::debug!("Loaded config: {:#?}", config);
+
+    Builder::new(&config, opts, &base_dir)?.build()?;
 
     Ok(())
 }
