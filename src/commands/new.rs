@@ -76,6 +76,7 @@ macro_rules! template_cpp_executable_main {
     () => {
         r#"
 #include <iostream>
+
 int main() {
     std::cout << "Hello, World!" << std::endl;
     return 0;

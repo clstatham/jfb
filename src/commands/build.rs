@@ -97,6 +97,20 @@ pub fn build(args: &Args, _opts: &BuildOpts) -> Result<()> {
                     .unwrap_or(&config.build.cpp_compiler),
             };
 
+            let standard = match target.language {
+                TargetLanguage::C => target
+                    .build_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.c_standard.as_ref())
+                    .unwrap_or(&config.build.c_standard),
+                TargetLanguage::Cpp => target
+                    .build_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.cpp_standard.as_ref())
+                    .unwrap_or(&config.build.cpp_standard),
+            };
+            let standard_arg = format!("-std={standard}");
+
             let include_dirs = target
                 .include_dirs
                 .iter()
@@ -134,6 +148,7 @@ pub fn build(args: &Args, _opts: &BuildOpts) -> Result<()> {
             );
 
             let command = cmd!(sh, "{compiler}")
+                .arg(standard_arg)
                 .args(&flags)
                 .args(&defines)
                 .args(&include_dirs)
