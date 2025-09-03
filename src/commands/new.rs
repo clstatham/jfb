@@ -10,6 +10,9 @@ macro_rules! template_gitignore {
 # Ignore build artifacts
 /{build_dir}/
 
+# Ignore language server artifacts
+/.cache/
+
 # Ignore OS generated files
 .DS_Store
 Thumbs.db

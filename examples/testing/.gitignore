@@ -1,6 +1,0 @@
-# Ignore build artifacts
-/build/
-
-# Ignore OS generated files
-.DS_Store
-Thumbs.db

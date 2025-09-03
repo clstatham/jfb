@@ -118,7 +118,10 @@ pub struct BuildConfig {
     pub cpp_standard: String,
 
     /// Linker to use
-    pub linker: String,
+    pub c_linker: String,
+
+    /// C++ linker to use
+    pub cpp_linker: String,
 
     /// Include debug symbols
     pub debug: bool,
@@ -146,7 +149,8 @@ impl Default for BuildConfig {
             cpp_compiler: "g++".to_string(),
             c_standard: "c11".to_string(),
             cpp_standard: "c++11".to_string(),
-            linker: "gcc".to_string(),
+            c_linker: "gcc".to_string(),
+            cpp_linker: "g++".to_string(),
             debug: true,
             warnings_as_errors: false,
             warnings: vec![
@@ -188,8 +192,11 @@ pub struct BuildConfigOverrides {
     /// C++ standard to use (c++11, c++14, c++17, c++20, c++23)
     pub cpp_standard: Option<String>,
 
-    /// Linker to use
-    pub linker: Option<String>,
+    /// C linker to use
+    pub c_linker: Option<String>,
+
+    /// C++ linker to use
+    pub cpp_linker: Option<String>,
 
     /// Include debug symbols
     pub debug: Option<bool>,

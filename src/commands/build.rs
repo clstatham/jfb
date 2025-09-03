@@ -166,11 +166,18 @@ pub fn build(args: &Args, _opts: &BuildOpts) -> Result<()> {
 
         // Link object files into the final executable
         let output_exe = out_dir.join(&target.name);
-        let linker = target
-            .build_overrides
-            .as_ref()
-            .and_then(|overrides| overrides.linker.as_ref())
-            .unwrap_or(&config.build.linker);
+        let linker = match target.language {
+            TargetLanguage::C => target
+                .build_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.c_linker.as_ref())
+                .unwrap_or(&config.build.c_compiler),
+            TargetLanguage::Cpp => target
+                .build_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.cpp_linker.as_ref())
+                .unwrap_or(&config.build.cpp_compiler),
+        };
 
         cmd!(sh, "{linker}")
             .args(&obj_files)
