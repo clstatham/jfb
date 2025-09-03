@@ -11,15 +11,23 @@ cpp_standard = "c++11"
 linker = "gcc"
 debug = true
 warnings_as_errors = false
-warnings = ["all", "extra", "pedantic", "shadow", "format=2"]
+warnings = [
+    "all",
+    "extra",
+    "pedantic",
+    "shadow",
+    "format=2",
+]
 flags = [
     "-fdiagnostics-color=always",
+    "-fno-common",
     "-fstack-protector-strong",
     "-Wno-unused-parameter",
 ]
 defines = []
 
-[target.testbin]
+[[target]]
+name = "testbin"
 type = "executable"
 language = "c"
 source_dirs = ["src"]

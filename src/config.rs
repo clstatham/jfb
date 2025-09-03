@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::build::BuildOpts;
-use crate::commands::new::NewOpts;
+use crate::commands::{build::BuildOpts, new::NewOpts};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -63,7 +61,7 @@ pub struct Config {
     /// Target configurations
     #[serde(rename = "target")]
     #[serde(default)]
-    pub targets: HashMap<String, TargetConfig>,
+    pub targets: Vec<TargetConfig>,
 }
 
 impl Config {
@@ -83,7 +81,7 @@ impl Config {
                 name: name.to_string(),
             },
             build: BuildConfig::default(),
-            targets: HashMap::new(),
+            targets: Vec::new(),
         }
     }
 }
@@ -100,6 +98,9 @@ pub struct WorkspaceConfig {
 pub struct BuildConfig {
     /// Directory to place build artifacts
     pub build_dir: PathBuf,
+
+    /// Whether to output a `compile_commands.json` file
+    pub output_compile_commands: bool,
 
     /// Optimization level (0, 1, 2, 3, s, z)
     pub opt_level: String,
@@ -139,6 +140,7 @@ impl Default for BuildConfig {
     fn default() -> Self {
         Self {
             build_dir: PathBuf::from("build"),
+            output_compile_commands: true,
             opt_level: "0".to_string(),
             c_compiler: "gcc".to_string(),
             cpp_compiler: "g++".to_string(),
@@ -206,7 +208,7 @@ pub struct BuildConfigOverrides {
 }
 
 /// Target programming language
-#[derive(Copy, ValueEnum, Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Copy, ValueEnum, Debug, Default, PartialEq, Clone, Serialize, Deserialize)]
 pub enum TargetLanguage {
     #[default]
     #[clap(name = "c")]
@@ -219,7 +221,7 @@ pub enum TargetLanguage {
 }
 
 /// Type of build target
-#[derive(Copy, ValueEnum, Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Copy, ValueEnum, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TargetType {
     /// Executable target
     #[default]
@@ -232,8 +234,11 @@ pub enum TargetType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct TargetConfig {
+    /// Name of the target
+    #[serde(rename = "name")]
+    pub name: String,
+
     /// Type of the target (executable, staticlib, sharedlib)
     #[serde(rename = "type")]
     pub target_type: TargetType,
@@ -256,6 +261,7 @@ pub struct TargetConfig {
 impl Default for TargetConfig {
     fn default() -> Self {
         Self {
+            name: "mytarget".to_string(),
             target_type: TargetType::Executable,
             language: TargetLanguage::C,
             source_dirs: vec!["src".into()],

@@ -1,29 +1,29 @@
-use crate::config::{Args, Config};
+use std::path::Path;
+
+use crate::config::{Args, Config, TargetType};
+use anyhow::Result;
 use xshell::{Shell, cmd};
 
 use super::build::BuildOpts;
 
-pub fn run(args: &Args, build_opts: &BuildOpts) -> anyhow::Result<()> {
-    let config_path = &args.opts.config;
-    let base_dir = config_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-
-    let config = Config::load(config_path)?;
-    let base_dir = base_dir.canonicalize()?;
-
-    // First, build the project
+pub fn run(args: &Args, build_opts: &BuildOpts) -> Result<()> {
+    // build first
     crate::commands::build::build(args, build_opts)?;
 
-    // Then, run the executable target
+    let config_path = &args.opts.config;
+    let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let base_dir = base_dir.canonicalize()?;
+    let config = Config::load(config_path)?;
+
     let build_dir = base_dir.join(&config.build.build_dir);
-    let (executable_name, _executable_config) = config
+    let executable = config
         .targets
         .iter()
-        .find(|(_, t)| matches!(t.target_type, crate::config::TargetType::Executable))
+        .find(|t| matches!(t.target_type, TargetType::Executable))
         .ok_or_else(|| anyhow::anyhow!("No executable target found in configuration"))?;
 
-    let exe_path = build_dir.join(executable_name).join(executable_name);
+    let exe_path = build_dir.join(&executable.name).join(&executable.name);
     if !exe_path.exists() {
         return Err(anyhow::anyhow!(
             "Executable not found: {}",
