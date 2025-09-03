@@ -21,8 +21,6 @@ pub struct CompileCommand {
     pub file: String,
 }
 
-pub type CompileCommands = Vec<CompileCommand>;
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct FileHashCache {
     #[serde(flatten)]
@@ -57,14 +55,13 @@ pub struct Builder<'a> {
     _opts: &'a BuildOpts,
     sh: Shell,
     base_dir: PathBuf,
-    compile_commands: CompileCommands,
+    compile_commands: HashMap<PathBuf, CompileCommand>,
     file_cache: FileHashCache,
 }
 
 impl<'a> Builder<'a> {
     pub fn new(config: &'a Config, opts: &'a BuildOpts, base_dir: &Path) -> Result<Self> {
         let sh = Shell::new()?;
-        let compile_commands = CompileCommands::new();
         let base_dir = base_dir.canonicalize()?;
 
         let cache_path = base_dir
@@ -76,6 +73,23 @@ impl<'a> Builder<'a> {
         } else {
             FileHashCache::new()
         };
+
+        let compile_commands_path = base_dir
+            .join(&config.build.build_dir)
+            .join("compile_commands.json");
+        let compile_commands_vec: Vec<CompileCommand> = if std::fs::exists(&compile_commands_path)?
+        {
+            let data = std::fs::read_to_string(compile_commands_path)?;
+            serde_json::from_str(&data)?
+        } else {
+            Vec::new()
+        };
+
+        let mut compile_commands = HashMap::new();
+        for compile_command in compile_commands_vec {
+            let path = PathBuf::from(&compile_command.file);
+            compile_commands.insert(path, compile_command);
+        }
 
         Ok(Self {
             config,
@@ -94,12 +108,6 @@ impl<'a> Builder<'a> {
 
         // compile every target
         for target in self.config.targets.iter() {
-            // skip static libraries for now
-            if target.target_type == TargetType::StaticLibrary {
-                log::info!("Skipping static library target: {}", target.name);
-                continue;
-            }
-
             log::info!("Building target: {}", target.name);
 
             self.compile_target(target, &build_dir)?;
@@ -162,29 +170,63 @@ impl<'a> Builder<'a> {
             }
         }
 
-        // link all object files into the final executable
-        let output_exe = out_dir.join(&target.name);
+        match target.target_type {
+            TargetType::Executable => {
+                // link all object files into the final executable
+                let output_exe = out_dir.join(&target.name);
 
-        let linker = match target.language {
-            TargetLanguage::C => target
-                .build_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.c_linker.as_ref())
-                .unwrap_or(&self.config.build.c_compiler),
-            TargetLanguage::Cpp => target
-                .build_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.cpp_linker.as_ref())
-                .unwrap_or(&self.config.build.cpp_compiler),
-        };
+                let linker = match target.language {
+                    TargetLanguage::C => target
+                        .build_overrides
+                        .as_ref()
+                        .and_then(|overrides| overrides.c_linker.as_ref())
+                        .unwrap_or(&self.config.build.c_compiler),
+                    TargetLanguage::Cpp => target
+                        .build_overrides
+                        .as_ref()
+                        .and_then(|overrides| overrides.cpp_linker.as_ref())
+                        .unwrap_or(&self.config.build.cpp_compiler),
+                };
 
-        cmd!(self.sh, "{linker}")
-            .args(&obj_files)
-            .arg("-o")
-            .arg(&output_exe)
-            .run()?;
+                let library_paths = target
+                    .library_dirs
+                    .iter()
+                    .map(|dir| format!("-L{}", target_dir.join(dir).display()))
+                    .collect::<Vec<_>>();
 
-        log::debug!("Linked executable: {}", output_exe.display());
+                let libraries = target
+                    .libraries
+                    .iter()
+                    .map(|lib| {
+                        let lib_name = lib.file_stem().unwrap().to_string_lossy();
+                        format!("-l{}", lib_name.strip_prefix("lib").unwrap_or(&lib_name))
+                    })
+                    .collect::<Vec<_>>();
+
+                cmd!(self.sh, "{linker}")
+                    .arg("-static")
+                    .args(&obj_files)
+                    .args(&library_paths)
+                    .args(&libraries)
+                    .arg("-o")
+                    .arg(&output_exe)
+                    .run()?;
+
+                log::debug!("Linked executable: {}", output_exe.display());
+            }
+            TargetType::StaticLibrary => {
+                // archive all object files into a static library
+                let output_lib = out_dir.join(format!("lib{}.a", &target.name));
+
+                cmd!(self.sh, "ar")
+                    .arg("rcs")
+                    .arg(&output_lib)
+                    .args(&obj_files)
+                    .run()?;
+
+                log::debug!("Created static library: {}", output_lib.display());
+            }
+        }
 
         Ok(())
     }
@@ -261,11 +303,47 @@ impl<'a> Builder<'a> {
                 .unwrap_or(&self.config.build.opt_level)
         );
 
+        let warnings = self
+            .config
+            .build
+            .warnings
+            .iter()
+            .chain(
+                target
+                    .build_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.warnings.as_ref())
+                    .unwrap_or(&vec![]),
+            )
+            .map(|warn| format!("-W{}", warn))
+            .collect::<Vec<_>>();
+
+        let mut extra_args = vec![];
+        if target
+            .build_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.debug)
+            .unwrap_or(self.config.build.debug)
+        {
+            extra_args.push("-g".to_string());
+        }
+
+        if target
+            .build_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.warnings_as_errors)
+            .unwrap_or(self.config.build.warnings_as_errors)
+        {
+            extra_args.push("-Werror".to_string());
+        }
+
         let command = cmd!(self.sh, "{compiler}")
             .arg(standard_arg)
             .args(&flags)
             .args(&defines)
             .args(&include_dirs)
+            .args(&warnings)
+            .args(&extra_args)
             .arg(&opt_level)
             .arg("-c")
             .arg(src)
@@ -282,7 +360,8 @@ impl<'a> Builder<'a> {
                 file: src.to_string_lossy().into_owned(),
             };
 
-            self.compile_commands.push(compile_command);
+            self.compile_commands
+                .insert(src.to_path_buf(), compile_command);
         }
 
         command.run()?;
@@ -295,8 +374,14 @@ impl<'a> Builder<'a> {
     fn write_build_artifacts(&self) -> Result<()> {
         let build_dir = self.base_dir.join(&self.config.build.build_dir);
         let compile_commands_path = build_dir.join("compile_commands.json");
-        let json = serde_json::to_string_pretty(&self.compile_commands)?;
-        self.sh.write_file(&compile_commands_path, json)?;
+        let compile_commands_vec: Vec<CompileCommand> = self
+            .compile_commands
+            .values()
+            .map(ToOwned::to_owned)
+            .collect();
+        let compile_commands_json = serde_json::to_string_pretty(&compile_commands_vec)?;
+        self.sh
+            .write_file(&compile_commands_path, compile_commands_json)?;
         log::debug!(
             "Wrote compile commands to {}",
             compile_commands_path.display()

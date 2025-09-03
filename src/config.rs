@@ -260,6 +260,12 @@ pub struct TargetConfig {
     /// Include directories
     pub include_dirs: Vec<PathBuf>,
 
+    /// Library directories
+    pub library_dirs: Vec<PathBuf>,
+
+    /// Libraries to link
+    pub libraries: Vec<PathBuf>,
+
     /// Build configuration overrides for this target
     #[serde(rename = "build")]
     pub build_overrides: Option<BuildConfigOverrides>,
@@ -273,6 +279,8 @@ impl Default for TargetConfig {
             language: TargetLanguage::C,
             source_dirs: vec!["src".into()],
             include_dirs: vec!["include".into()],
+            library_dirs: vec![],
+            libraries: vec![],
             build_overrides: None,
         }
     }
