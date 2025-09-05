@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
-    hash::{DefaultHasher, Hasher},
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use anyhow::Result;
@@ -11,7 +11,9 @@ use xshell::{Shell, cmd};
 
 use crate::config::{Args, Config, TargetConfig, TargetLanguage, TargetType};
 
-#[derive(Debug, Parser)]
+pub mod deps;
+
+#[derive(Debug, Clone, Parser)]
 pub struct BuildOpts {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,58 +24,62 @@ pub struct CompileCommand {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct FileHashCache {
+pub struct FileUpdateCache {
     #[serde(flatten)]
-    cache: HashMap<PathBuf, u64>,
+    cache: HashMap<PathBuf, SystemTime>,
 }
 
-impl FileHashCache {
+impl FileUpdateCache {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn is_updated(&mut self, path: &Path) -> Result<bool> {
-        // get the hash of the file's contents
-        let mut hasher = DefaultHasher::new();
-        let content = std::fs::read(path)?;
-        hasher.write(&content);
-        let hash = hasher.finish();
-        let cached_hash = self.cache.get(path);
-        let is_updated = match cached_hash {
-            Some(cached) => *cached != hash,
+        // check if the modified time is greater than our cached time
+        let metadata = std::fs::metadata(path)?;
+        let modified = metadata.modified()?;
+        let cached_time = self.cache.get(path);
+        let is_updated = match cached_time {
+            Some(cached) => &modified > cached,
             None => true,
         };
         if is_updated {
-            self.cache.insert(path.to_path_buf(), hash);
+            self.cache.insert(path.to_path_buf(), modified);
         }
         Ok(is_updated)
     }
 }
 
-pub struct Builder<'a> {
-    config: &'a Config,
-    _opts: &'a BuildOpts,
+pub struct Builder {
+    config: Config,
+    _opts: BuildOpts,
     sh: Shell,
     base_dir: PathBuf,
     compile_commands: HashMap<PathBuf, CompileCommand>,
-    file_cache: FileHashCache,
+    file_cache: FileUpdateCache,
+    config_updated: bool,
 }
 
-impl<'a> Builder<'a> {
-    pub fn new(config: &'a Config, opts: &'a BuildOpts, base_dir: &Path) -> Result<Self> {
+impl Builder {
+    fn new(args: &Args, config: Config, opts: BuildOpts, base_dir: &Path) -> Result<Self> {
         let sh = Shell::new()?;
         let base_dir = base_dir.canonicalize()?;
 
+        // load or initialize our file update cache
         let cache_path = base_dir
             .join(&config.build.build_dir)
             .join("jfb_cache.json");
-        let file_update_cache = if std::fs::exists(&cache_path)? {
+        let mut file_cache = if std::fs::exists(&cache_path)? {
             let data = std::fs::read_to_string(cache_path)?;
             serde_json::from_str(&data)?
         } else {
-            FileHashCache::new()
+            FileUpdateCache::new()
         };
 
+        // check if the config file has been updated
+        let config_updated = file_cache.is_updated(&args.opts.config)?;
+
+        // load existing compile_commands if available
         let compile_commands_path = base_dir
             .join(&config.build.build_dir)
             .join("compile_commands.json");
@@ -85,6 +91,7 @@ impl<'a> Builder<'a> {
             Vec::new()
         };
 
+        // rebuild our compile_commands map from the vector
         let mut compile_commands = HashMap::new();
         for compile_command in compile_commands_vec {
             let path = PathBuf::from(&compile_command.file);
@@ -97,7 +104,8 @@ impl<'a> Builder<'a> {
             sh,
             base_dir,
             compile_commands,
-            file_cache: file_update_cache,
+            file_cache,
+            config_updated,
         })
     }
 
@@ -106,11 +114,16 @@ impl<'a> Builder<'a> {
         self.sh.create_dir(&build_dir)?;
         log::debug!("Using build directory: {}", build_dir.display());
 
+        // fetch and build dependencies first
+        self.fetch_dependencies()?;
+        self.build_dependencies()?;
+
+        let targets = self.config.targets.clone();
         // compile every target
-        for target in self.config.targets.iter() {
+        for target in targets {
             log::info!("Building target: {}", target.name);
 
-            self.compile_target(target, &build_dir)?;
+            self.compile_target(&target, &build_dir)?;
         }
 
         if self.config.build.output_compile_commands {
@@ -127,14 +140,12 @@ impl<'a> Builder<'a> {
         let out_dir = build_dir.join(&target.name);
         self.sh.create_dir(&out_dir)?;
 
-        let target_dir = self.base_dir.join(&target.name);
-
         let mut src_files = vec![];
         let mut obj_files = vec![];
 
         // populate src_files and obj_files
         for src_dir in target.source_dirs.iter() {
-            let src_dir = target_dir.join(src_dir);
+            let src_dir = self.base_dir.join(src_dir);
 
             let entries = self.sh.read_dir(src_dir)?;
             for entry in entries {
@@ -163,8 +174,8 @@ impl<'a> Builder<'a> {
         // compile our source files
         for (src, obj) in src_files.iter().zip(obj_files.iter()) {
             // check if the file has been updated compared to our cached update time
-            if self.file_cache.is_updated(src)? {
-                self.compile_file(src, obj, &target_dir, target)?;
+            if self.config_updated || self.file_cache.is_updated(src)? {
+                self.compile_file(src, obj, target)?;
             } else {
                 log::debug!("Skipping unchanged file: {}", src.display());
             }
@@ -191,7 +202,7 @@ impl<'a> Builder<'a> {
                 let library_paths = target
                     .library_dirs
                     .iter()
-                    .map(|dir| format!("-L{}", target_dir.join(dir).display()))
+                    .map(|dir| format!("-L{}", self.base_dir.join(dir).display()))
                     .collect::<Vec<_>>();
 
                 let libraries = target
@@ -204,12 +215,12 @@ impl<'a> Builder<'a> {
                     .collect::<Vec<_>>();
 
                 cmd!(self.sh, "{linker}")
-                    .arg("-static")
                     .args(&obj_files)
                     .args(&library_paths)
                     .args(&libraries)
                     .arg("-o")
                     .arg(&output_exe)
+                    .quiet()
                     .run()?;
 
                 log::debug!("Linked executable: {}", output_exe.display());
@@ -222,6 +233,7 @@ impl<'a> Builder<'a> {
                     .arg("rcs")
                     .arg(&output_lib)
                     .args(&obj_files)
+                    .quiet()
                     .run()?;
 
                 log::debug!("Created static library: {}", output_lib.display());
@@ -231,13 +243,7 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    fn compile_file(
-        &mut self,
-        src: &Path,
-        obj: &Path,
-        target_dir: &Path,
-        target: &TargetConfig,
-    ) -> Result<()> {
+    fn compile_file(&mut self, src: &Path, obj: &Path, target: &TargetConfig) -> Result<()> {
         let compiler = match target.language {
             TargetLanguage::C => target
                 .build_overrides
@@ -268,7 +274,7 @@ impl<'a> Builder<'a> {
         let include_dirs = target
             .include_dirs
             .iter()
-            .map(|dir| format!("-I{}", target_dir.join(dir).display()))
+            .map(|dir| format!("-I{}", self.base_dir.join(dir).display()))
             .collect::<Vec<_>>();
 
         let defines = self
@@ -338,7 +344,7 @@ impl<'a> Builder<'a> {
         }
 
         let command = cmd!(self.sh, "{compiler}")
-            .arg(standard_arg)
+            .arg(&standard_arg)
             .args(&flags)
             .args(&defines)
             .args(&include_dirs)
@@ -364,7 +370,7 @@ impl<'a> Builder<'a> {
                 .insert(src.to_path_buf(), compile_command);
         }
 
-        command.run()?;
+        command.quiet().run()?;
 
         log::info!("Compiled {} to {}", src.display(), obj.display());
 
@@ -396,7 +402,7 @@ impl<'a> Builder<'a> {
     }
 }
 
-pub fn build(args: &Args, opts: &BuildOpts) -> Result<()> {
+pub fn build(args: &Args, opts: BuildOpts) -> Result<()> {
     let base_dir = args
         .opts
         .config
@@ -407,7 +413,7 @@ pub fn build(args: &Args, opts: &BuildOpts) -> Result<()> {
     let config = Config::load(&args.opts.config)?;
     log::debug!("Loaded config: {:#?}", config);
 
-    Builder::new(&config, opts, &base_dir)?.build()?;
+    Builder::new(args, config, opts, &base_dir)?.build()?;
 
     Ok(())
 }

@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -56,7 +59,13 @@ pub struct Config {
 
     /// Global build configuration
     #[serde(rename = "build")]
+    #[serde(default)]
     pub build: BuildConfig,
+
+    /// Dependency configurations
+    #[serde(rename = "dependencies")]
+    #[serde(default)]
+    pub dependencies: HashMap<String, DependencyConfig>,
 
     /// Target configurations
     #[serde(rename = "target")]
@@ -67,11 +76,12 @@ pub struct Config {
 impl Config {
     /// Load configuration from a TOML file
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        if !path.as_ref().exists() {
-            anyhow::bail!("Configuration file not found: {}", path.as_ref().display());
-        }
-        let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let config = config::Config::builder()
+            .add_source(config::File::from(path.as_ref()).required(true))
+            .build()?;
+
+        let config = config.try_deserialize::<Config>()?;
+
         Ok(config)
     }
 
@@ -81,6 +91,7 @@ impl Config {
                 name: name.to_string(),
             },
             build: BuildConfig::default(),
+            dependencies: HashMap::new(),
             targets: Vec::new(),
         }
     }
@@ -99,10 +110,13 @@ pub struct BuildConfig {
     /// Directory to place build artifacts
     pub build_dir: PathBuf,
 
+    /// Directory to store dependency source code
+    pub dep_dir: PathBuf,
+
     /// Whether to output a `compile_commands.json` file
     pub output_compile_commands: bool,
 
-    /// Optimization level (0, 1, 2, 3, s, z)
+    /// Optimization level (0, 1, 2, 3, s, z, etc)
     pub opt_level: String,
 
     /// C compiler to use
@@ -111,10 +125,10 @@ pub struct BuildConfig {
     /// C++ compiler to use
     pub cpp_compiler: String,
 
-    /// C standard to use (c99, c11, c17, c23)
+    /// C standard to use (c99, c11, c17, c23, etc)
     pub c_standard: String,
 
-    /// C++ standard to use (c++11, c++14, c++17, c++20, c++23)
+    /// C++ standard to use (c++11, c++14, c++17, c++20, c++23, etc)
     pub cpp_standard: String,
 
     /// Linker to use
@@ -143,6 +157,7 @@ impl Default for BuildConfig {
     fn default() -> Self {
         Self {
             build_dir: PathBuf::from("build"),
+            dep_dir: PathBuf::from("deps"),
             output_compile_commands: true,
             opt_level: "0".to_string(),
             c_compiler: "gcc".to_string(),
@@ -241,6 +256,7 @@ pub enum TargetType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TargetConfig {
     /// Name of the target
     #[serde(rename = "name")]
@@ -266,6 +282,9 @@ pub struct TargetConfig {
     /// Libraries to link
     pub libraries: Vec<PathBuf>,
 
+    /// External dependencies to link against
+    pub dependencies: Vec<String>,
+
     /// Build configuration overrides for this target
     #[serde(rename = "build")]
     pub build_overrides: Option<BuildConfigOverrides>,
@@ -281,7 +300,32 @@ impl Default for TargetConfig {
             include_dirs: vec!["include".into()],
             library_dirs: vec![],
             libraries: vec![],
+            dependencies: vec![],
             build_overrides: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
+#[serde(default)]
+pub struct DependencyConfig {
+    /// GitHub repository URL (e.g., "username/reponame")
+    pub git: String,
+
+    /// Optional tag, branch, or commit to checkout
+    pub tag: Option<String>,
+
+    /// CMake configuration flags for this dependency
+    pub cmake_flags: Vec<String>,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for DependencyConfig {
+    fn default() -> Self {
+        Self {
+            git: String::new(),
+            tag: None,
+            cmake_flags: vec![],
         }
     }
 }

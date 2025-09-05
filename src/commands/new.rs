@@ -1,14 +1,17 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::Parser;
 
 use crate::config::{Config, TargetConfig, TargetLanguage, TargetType};
 
 macro_rules! template_gitignore {
-    ($build_dir: expr) => {
+    ($build_dir: expr, $deps_dir: expr) => {
         format!(
             r#"
 # Ignore build artifacts
 /{build_dir}/
+/{deps_dir}/
 
 # Ignore language server artifacts
 /.cache/
@@ -17,7 +20,8 @@ macro_rules! template_gitignore {
 .DS_Store
 Thumbs.db
 "#,
-            build_dir = $build_dir
+            build_dir = $build_dir,
+            deps_dir = $deps_dir
         )
         .trim_start()
     };
@@ -28,8 +32,9 @@ macro_rules! template_c_executable_main {
         r#"
 #include <stdio.h>
 
-int main() {
+int main(void) {
     printf("Hello, World!\n");
+
     return 0;
 }
 "#
@@ -44,7 +49,7 @@ macro_rules! template_c_library_lib {
 #include "{lib_name}.h"
 #include <stdio.h>
 
-void {lib_name}_hello() {{
+void {lib_name}_hello(void) {{
     printf("Hello from {lib_name}!\n");
 }}
 "#,
@@ -61,7 +66,7 @@ macro_rules! template_c_library_lib_h {
 #ifndef {lib_name_upper}_H
 #define {lib_name_upper}_H
 
-void {lib_name}_hello();
+void {lib_name}_hello(void);
 
 #endif // {lib_name_upper}_H
 "#,
@@ -79,6 +84,7 @@ macro_rules! template_cpp_executable_main {
 
 int main() {
     std::cout << "Hello, World!" << std::endl;
+    
     return 0;
 }
 "#
@@ -151,8 +157,8 @@ pub fn new(opts: &NewOpts) -> Result<()> {
             name: bin.to_string(),
             target_type: TargetType::Executable,
             language: opts.language,
-            source_dirs: vec!["src".into()],
-            include_dirs: vec!["include".into()],
+            source_dirs: vec![PathBuf::from(format!("{}/src", bin))],
+            include_dirs: vec![PathBuf::from(format!("{}/include", bin))],
             ..Default::default()
         });
     }
@@ -162,8 +168,8 @@ pub fn new(opts: &NewOpts) -> Result<()> {
             name: lib.to_string(),
             target_type: TargetType::StaticLibrary,
             language: opts.language,
-            source_dirs: vec!["src".into()],
-            include_dirs: vec!["include".into()],
+            source_dirs: vec![PathBuf::from(format!("{}/src", lib))],
+            include_dirs: vec![PathBuf::from(format!("{}/include", lib))],
             ..Default::default()
         });
     }
@@ -178,7 +184,10 @@ pub fn new(opts: &NewOpts) -> Result<()> {
 
         sh.write_file(
             ".gitignore",
-            template_gitignore!(config.build.build_dir.display()),
+            template_gitignore!(
+                config.build.build_dir.display(),
+                config.build.dep_dir.display()
+            ),
         )?;
 
         for target in config.targets.iter() {

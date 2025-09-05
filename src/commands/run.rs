@@ -6,7 +6,7 @@ use xshell::{Shell, cmd};
 
 use super::build::BuildOpts;
 
-pub fn run(args: &Args, build_opts: &BuildOpts) -> Result<()> {
+pub fn run(args: &Args, build_opts: BuildOpts) -> Result<()> {
     // build first
     crate::commands::build::build(args, build_opts)?;
 
@@ -34,7 +34,7 @@ pub fn run(args: &Args, build_opts: &BuildOpts) -> Result<()> {
     log::info!("Running executable: {}", exe_path.display());
     let sh = Shell::new()?;
     let _guard = sh.push_dir(&base_dir);
-    cmd!(sh, "{exe_path}").run()?;
+    cmd!(sh, "{exe_path}").quiet().run()?;
 
     Ok(())
 }
