@@ -182,7 +182,7 @@ impl Builder {
         }
 
         match target.target_type {
-            TargetType::Executable => {
+            TargetType::Binary => {
                 // link all object files into the final executable
                 let output_exe = out_dir.join(&target.name);
 

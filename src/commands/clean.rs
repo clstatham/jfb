@@ -1,8 +1,16 @@
+use clap::{ArgAction, Parser};
 use xshell::Shell;
 
 use crate::config::{Args, Config};
 
-pub fn clean(args: &Args) -> anyhow::Result<()> {
+#[derive(Parser, Debug)]
+pub struct CleanOpts {
+    /// Clean the dependency directory as well
+    #[arg(short, long, action = ArgAction::SetTrue)]
+    pub deps: bool,
+}
+
+pub fn clean(args: &Args, opts: &CleanOpts) -> anyhow::Result<()> {
     let config_path = &args.opts.config;
     let base_dir = config_path
         .parent()
@@ -19,6 +27,16 @@ pub fn clean(args: &Args) -> anyhow::Result<()> {
         sh.remove_path(&build_dir)?;
     } else {
         log::info!("Build directory does not exist: {}", build_dir.display());
+    }
+
+    if opts.deps {
+        let dep_dir = base_dir.join(&config.build.dep_dir);
+        if dep_dir.exists() {
+            log::info!("Removing dependency directory: {}", dep_dir.display());
+            sh.remove_path(&dep_dir)?;
+        } else {
+            log::info!("Dependency directory does not exist: {}", dep_dir.display());
+        }
     }
 
     Ok(())

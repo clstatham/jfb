@@ -6,7 +6,7 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{build::BuildOpts, new::NewOpts};
+use crate::commands::{build::BuildOpts, clean::CleanOpts, new::NewOpts};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -22,7 +22,7 @@ pub struct Args {
 
 #[derive(Debug, Parser)]
 pub struct Opts {
-    /// Path to configuration file to load.
+    /// Path to configuration file to load
     #[arg(short, long, default_value = "jfb.toml")]
     pub config: PathBuf,
 }
@@ -48,7 +48,10 @@ pub enum Command {
     },
 
     /// Clean build artifacts
-    Clean,
+    Clean {
+        #[clap(flatten)]
+        opts: CleanOpts,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +88,7 @@ impl Config {
         Ok(config)
     }
 
+    /// Create a new default configuration with the given project name
     pub fn new(name: &str) -> Self {
         Self {
             workspace: WorkspaceConfig {
@@ -232,11 +236,13 @@ pub struct BuildConfigOverrides {
 /// Target programming language
 #[derive(Copy, ValueEnum, Debug, Default, PartialEq, Clone, Serialize, Deserialize)]
 pub enum TargetLanguage {
+    /// C language
     #[default]
     #[clap(name = "c")]
     #[serde(rename = "c")]
     C,
 
+    /// C++ language
     #[clap(name = "cpp", alias = "c++", alias = "cc", alias = "cxx")]
     #[serde(rename = "cpp", alias = "c++", alias = "cc", alias = "cxx")]
     Cpp,
@@ -245,13 +251,13 @@ pub enum TargetLanguage {
 /// Type of build target
 #[derive(Copy, ValueEnum, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TargetType {
-    /// Executable target
+    /// Binary executable target
     #[default]
-    #[serde(rename = "executable")]
-    Executable,
+    #[serde(rename = "binary", alias = "bin")]
+    Binary,
 
     /// Static library target
-    #[serde(rename = "staticlib")]
+    #[serde(rename = "staticlib", alias = "lib")]
     StaticLibrary,
 }
 
@@ -267,7 +273,6 @@ pub struct TargetConfig {
     pub target_type: TargetType,
 
     /// Programming language of the target (c, cpp)
-    #[serde(rename = "language")]
     pub language: TargetLanguage,
 
     /// Source files (supports glob patterns)
@@ -294,7 +299,7 @@ impl Default for TargetConfig {
     fn default() -> Self {
         Self {
             name: "mytarget".to_string(),
-            target_type: TargetType::Executable,
+            target_type: TargetType::Binary,
             language: TargetLanguage::C,
             source_dirs: vec!["src".into()],
             include_dirs: vec!["include".into()],
@@ -309,7 +314,7 @@ impl Default for TargetConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 #[serde(default)]
 pub struct DependencyConfig {
-    /// GitHub repository URL (e.g., "username/reponame")
+    /// URL to the Git repository (ending with '.git')
     pub git: String,
 
     /// Optional tag, branch, or commit to checkout

@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     match &args.command {
         Command::New { opts } => commands::new::new(opts),
         Command::Build { opts } => commands::build::build(&args, opts.clone()),
-        Command::Clean => commands::clean::clean(&args),
+        Command::Clean { opts } => commands::clean::clean(&args, opts),
         Command::Run { build_opts } => commands::run::run(&args, build_opts.clone()),
     }?;
 

@@ -133,7 +133,7 @@ pub struct NewOpts {
     pub name: String,
 
     /// Language of the project
-    #[clap(short, long)]
+    #[clap(short, long, alias = "lang")]
     pub language: TargetLanguage,
 
     /// Add a binary (executable) target
@@ -155,7 +155,7 @@ pub fn new(opts: &NewOpts) -> Result<()> {
     for bin in opts.bin.iter() {
         config.targets.push(TargetConfig {
             name: bin.to_string(),
-            target_type: TargetType::Executable,
+            target_type: TargetType::Binary,
             language: opts.language,
             source_dirs: vec![PathBuf::from(format!("{}/src", bin))],
             include_dirs: vec![PathBuf::from(format!("{}/include", bin))],
@@ -191,9 +191,6 @@ pub fn new(opts: &NewOpts) -> Result<()> {
         )?;
 
         for target in config.targets.iter() {
-            let target_name = &target.name;
-            let _guard = sh.push_dir(&target.name);
-
             for dir in target.source_dirs.iter() {
                 sh.create_dir(dir)?;
             }
@@ -203,11 +200,14 @@ pub fn new(opts: &NewOpts) -> Result<()> {
             }
 
             if !opts.bare {
+                let target_name = &target.name;
+                let _guard = sh.push_dir(&target.name);
+
                 match (&target.target_type, &target.language) {
-                    (TargetType::Executable, TargetLanguage::C) => {
+                    (TargetType::Binary, TargetLanguage::C) => {
                         sh.write_file("src/main.c", template_c_executable_main!())?;
                     }
-                    (TargetType::Executable, TargetLanguage::Cpp) => {
+                    (TargetType::Binary, TargetLanguage::Cpp) => {
                         sh.write_file("src/main.cpp", template_cpp_executable_main!())?;
                     }
                     (TargetType::StaticLibrary, TargetLanguage::C) => {

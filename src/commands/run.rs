@@ -20,7 +20,7 @@ pub fn run(args: &Args, build_opts: BuildOpts) -> Result<()> {
     let executable = config
         .targets
         .iter()
-        .find(|t| matches!(t.target_type, TargetType::Executable))
+        .find(|t| matches!(t.target_type, TargetType::Binary))
         .ok_or_else(|| anyhow::anyhow!("No executable target found in configuration"))?;
 
     let exe_path = build_dir.join(&executable.name).join(&executable.name);
