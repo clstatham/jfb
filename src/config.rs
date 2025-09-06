@@ -166,6 +166,9 @@ pub struct BuildConfig {
 
     /// Preprocessor defines
     pub defines: Vec<String>,
+
+    /// Extra CMake flags to use when building dependencies under this profile
+    pub cmake_flags: Vec<String>,
 }
 
 impl BuildConfig {
@@ -177,6 +180,7 @@ impl BuildConfig {
                 opt_level: "0".to_string(),
                 debug: true,
                 warnings_as_errors: false,
+                cmake_flags: vec!["-DCMAKE_BUILD_TYPE=Debug".to_string()],
                 ..Default::default()
             },
         );
@@ -186,6 +190,7 @@ impl BuildConfig {
                 opt_level: "3".to_string(),
                 debug: false,
                 warnings_as_errors: true,
+                cmake_flags: vec!["-DCMAKE_BUILD_TYPE=Release".to_string()],
                 ..Default::default()
             },
         );
@@ -219,6 +224,7 @@ impl Default for BuildConfig {
                 "-Wno-unused-parameter".to_string(),
             ],
             defines: vec![],
+            cmake_flags: vec![],
         }
     }
 }
@@ -264,6 +270,9 @@ pub struct BuildConfigOverrides {
 
     /// Preprocessor defines
     pub defines: Option<Vec<String>>,
+
+    /// Extra CMake flags to use when building dependencies under this profile
+    pub cmake_flags: Option<Vec<String>>,
 }
 
 /// Target programming language

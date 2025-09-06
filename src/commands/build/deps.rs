@@ -59,6 +59,9 @@ impl<'a> Builder<'a> {
         for flag in &dep.cmake_flags {
             cmake_cmd = cmake_cmd.arg(flag);
         }
+        for flag in &self.build_profile().cmake_flags {
+            cmake_cmd = cmake_cmd.arg(flag);
+        }
         cmake_cmd.run()?;
 
         log::info!("Building dependency `{}`", dep_name);
