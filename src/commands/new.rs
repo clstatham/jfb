@@ -174,19 +174,19 @@ pub fn new(opts: &NewOpts) -> Result<()> {
         });
     }
 
-    let toml_str = toml::to_string_pretty(&config)?;
-
     let sh = xshell::Shell::new()?;
     sh.create_dir(&opts.name)?;
     {
         let _guard = sh.push_dir(&opts.name);
+
+        let toml_str = toml::to_string_pretty(&config)?;
         sh.write_file("jfb.toml", &toml_str)?;
 
         sh.write_file(
             ".gitignore",
             template_gitignore!(
-                config.build.build_dir.display(),
-                config.build.dep_dir.display()
+                config.workspace.build_dir.display(),
+                config.workspace.dep_dir.display()
             ),
         )?;
 

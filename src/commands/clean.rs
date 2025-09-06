@@ -19,7 +19,7 @@ pub fn clean(args: &Args, opts: &CleanOpts) -> anyhow::Result<()> {
     let config = Config::load(config_path)?;
     let base_dir = base_dir.canonicalize()?;
 
-    let build_dir = base_dir.join(&config.build.build_dir);
+    let build_dir = base_dir.join(&config.workspace.build_dir);
 
     let sh = Shell::new()?;
     if build_dir.exists() {
@@ -30,7 +30,7 @@ pub fn clean(args: &Args, opts: &CleanOpts) -> anyhow::Result<()> {
     }
 
     if opts.deps {
-        let dep_dir = base_dir.join(&config.build.dep_dir);
+        let dep_dir = base_dir.join(&config.workspace.dep_dir);
         if dep_dir.exists() {
             log::info!("Removing dependency directory: {}", dep_dir.display());
             sh.remove_path(&dep_dir)?;

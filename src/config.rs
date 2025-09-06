@@ -57,16 +57,14 @@ pub enum Command {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Workspace configuration
-    #[serde(rename = "workspace")]
+    #[serde(default)]
     pub workspace: WorkspaceConfig,
 
     /// Global build configuration
-    #[serde(rename = "build")]
-    #[serde(default)]
-    pub build: BuildConfig,
+    #[serde(rename = "profile")]
+    pub build_profiles: HashMap<String, BuildConfig>,
 
     /// Dependency configurations
-    #[serde(rename = "dependencies")]
     #[serde(default)]
     pub dependencies: HashMap<String, DependencyConfig>,
 
@@ -77,6 +75,19 @@ pub struct Config {
 }
 
 impl Config {
+    /// Create a new default configuration with the given project name
+    pub fn new(name: &str) -> Self {
+        Self {
+            workspace: WorkspaceConfig {
+                name: name.to_string(),
+                ..Default::default()
+            },
+            build_profiles: BuildConfig::default_profiles(),
+            dependencies: HashMap::new(),
+            targets: Vec::new(),
+        }
+    }
+
     /// Load configuration from a TOML file
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let config = config::Config::builder()
@@ -87,30 +98,15 @@ impl Config {
 
         Ok(config)
     }
-
-    /// Create a new default configuration with the given project name
-    pub fn new(name: &str) -> Self {
-        Self {
-            workspace: WorkspaceConfig {
-                name: name.to_string(),
-            },
-            build: BuildConfig::default(),
-            dependencies: HashMap::new(),
-            targets: Vec::new(),
-        }
-    }
 }
 
 /// Workspace configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WorkspaceConfig {
     /// Name of the project
     pub name: String,
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BuildConfig {
     /// Directory to place build artifacts
     pub build_dir: PathBuf,
 
@@ -119,7 +115,22 @@ pub struct BuildConfig {
 
     /// Whether to output a `compile_commands.json` file
     pub output_compile_commands: bool,
+}
 
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            name: "myproject".to_string(),
+            build_dir: PathBuf::from("build"),
+            dep_dir: PathBuf::from("deps"),
+            output_compile_commands: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuildConfig {
     /// Optimization level (0, 1, 2, 3, s, z, etc)
     pub opt_level: String,
 
@@ -157,12 +168,34 @@ pub struct BuildConfig {
     pub defines: Vec<String>,
 }
 
+impl BuildConfig {
+    pub fn default_profiles() -> HashMap<String, BuildConfig> {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "debug".to_string(),
+            BuildConfig {
+                opt_level: "0".to_string(),
+                debug: true,
+                warnings_as_errors: false,
+                ..Default::default()
+            },
+        );
+        profiles.insert(
+            "release".to_string(),
+            BuildConfig {
+                opt_level: "3".to_string(),
+                debug: false,
+                warnings_as_errors: true,
+                ..Default::default()
+            },
+        );
+        profiles
+    }
+}
+
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
-            build_dir: PathBuf::from("build"),
-            dep_dir: PathBuf::from("deps"),
-            output_compile_commands: true,
             opt_level: "0".to_string(),
             c_compiler: "gcc".to_string(),
             cpp_compiler: "g++".to_string(),

@@ -6,7 +6,7 @@ use xshell::{Shell, cmd};
 
 use super::build::BuildOpts;
 
-pub fn run(args: &Args, build_opts: BuildOpts) -> Result<()> {
+pub fn run(args: &Args, build_opts: &BuildOpts) -> Result<()> {
     // build first
     crate::commands::build::build(args, build_opts)?;
 
@@ -16,7 +16,7 @@ pub fn run(args: &Args, build_opts: BuildOpts) -> Result<()> {
     let base_dir = base_dir.canonicalize()?;
     let config = Config::load(config_path)?;
 
-    let build_dir = base_dir.join(&config.build.build_dir);
+    let build_dir = base_dir.join(&config.workspace.build_dir);
     let executable = config
         .targets
         .iter()

@@ -9,12 +9,15 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use xshell::{Shell, cmd};
 
-use crate::config::{Args, Config, TargetConfig, TargetLanguage, TargetType};
+use crate::config::{Args, BuildConfig, Config, TargetConfig, TargetLanguage, TargetType};
 
 pub mod deps;
 
 #[derive(Debug, Clone, Parser)]
-pub struct BuildOpts {}
+pub struct BuildOpts {
+    #[arg(short, long, default_value = "debug")]
+    pub profile: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompileCommand {
@@ -50,9 +53,9 @@ impl FileUpdateCache {
     }
 }
 
-pub struct Builder {
-    config: Config,
-    _opts: BuildOpts,
+pub struct Builder<'a> {
+    config: &'a Config,
+    opts: &'a BuildOpts,
     sh: Shell,
     base_dir: PathBuf,
     compile_commands: HashMap<PathBuf, CompileCommand>,
@@ -60,14 +63,14 @@ pub struct Builder {
     config_updated: bool,
 }
 
-impl Builder {
-    fn new(args: &Args, config: Config, opts: BuildOpts, base_dir: &Path) -> Result<Self> {
+impl<'a> Builder<'a> {
+    fn new(args: &Args, config: &'a Config, opts: &'a BuildOpts, base_dir: &Path) -> Result<Self> {
         let sh = Shell::new()?;
         let base_dir = base_dir.canonicalize()?;
 
         // load or initialize our file update cache
         let cache_path = base_dir
-            .join(&config.build.build_dir)
+            .join(&config.workspace.build_dir)
             .join("jfb_cache.json");
         let mut file_cache = if std::fs::exists(&cache_path)? {
             let data = std::fs::read_to_string(cache_path)?;
@@ -81,7 +84,7 @@ impl Builder {
 
         // load existing compile_commands if available
         let compile_commands_path = base_dir
-            .join(&config.build.build_dir)
+            .join(&config.workspace.build_dir)
             .join("compile_commands.json");
         let compile_commands_vec: Vec<CompileCommand> = if std::fs::exists(&compile_commands_path)?
         {
@@ -100,7 +103,7 @@ impl Builder {
 
         Ok(Self {
             config,
-            _opts: opts,
+            opts,
             sh,
             base_dir,
             compile_commands,
@@ -109,8 +112,12 @@ impl Builder {
         })
     }
 
+    pub fn build_profile(&self) -> &BuildConfig {
+        &self.config.build_profiles[&self.opts.profile]
+    }
+
     pub fn build(mut self) -> Result<()> {
-        let build_dir = self.base_dir.join(&self.config.build.build_dir);
+        let build_dir = self.base_dir.join(&self.config.workspace.build_dir);
         self.sh.create_dir(&build_dir)?;
         log::debug!("Using build directory: {}", build_dir.display());
 
@@ -126,7 +133,7 @@ impl Builder {
             self.compile_target(&target, &build_dir)?;
         }
 
-        if self.config.build.output_compile_commands {
+        if self.config.workspace.output_compile_commands {
             self.write_build_artifacts()?;
         }
 
@@ -191,12 +198,12 @@ impl Builder {
                         .build_overrides
                         .as_ref()
                         .and_then(|overrides| overrides.c_linker.as_ref())
-                        .unwrap_or(&self.config.build.c_compiler),
+                        .unwrap_or(&self.build_profile().c_compiler),
                     TargetLanguage::Cpp => target
                         .build_overrides
                         .as_ref()
                         .and_then(|overrides| overrides.cpp_linker.as_ref())
-                        .unwrap_or(&self.config.build.cpp_compiler),
+                        .unwrap_or(&self.build_profile().cpp_compiler),
                 };
 
                 let library_paths = target
@@ -249,12 +256,12 @@ impl Builder {
                 .build_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.c_compiler.as_ref())
-                .unwrap_or(&self.config.build.c_compiler),
+                .unwrap_or(&self.build_profile().c_compiler),
             TargetLanguage::Cpp => target
                 .build_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.cpp_compiler.as_ref())
-                .unwrap_or(&self.config.build.cpp_compiler),
+                .unwrap_or(&self.build_profile().cpp_compiler),
         };
 
         let standard = match target.language {
@@ -262,12 +269,12 @@ impl Builder {
                 .build_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.c_standard.as_ref())
-                .unwrap_or(&self.config.build.c_standard),
+                .unwrap_or(&self.build_profile().c_standard),
             TargetLanguage::Cpp => target
                 .build_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.cpp_standard.as_ref())
-                .unwrap_or(&self.config.build.cpp_standard),
+                .unwrap_or(&self.build_profile().cpp_standard),
         };
         let standard_arg = format!("-std={standard}");
 
@@ -278,16 +285,14 @@ impl Builder {
             .collect::<Vec<_>>();
 
         let defines = self
-            .config
-            .build
+            .build_profile()
             .defines
             .iter()
             .map(|def| format!("-D{}", def))
             .collect::<Vec<_>>();
 
         let flags = self
-            .config
-            .build
+            .build_profile()
             .flags
             .iter()
             .chain(
@@ -306,12 +311,11 @@ impl Builder {
                 .build_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.opt_level.as_ref())
-                .unwrap_or(&self.config.build.opt_level)
+                .unwrap_or(&self.build_profile().opt_level)
         );
 
         let warnings = self
-            .config
-            .build
+            .build_profile()
             .warnings
             .iter()
             .chain(
@@ -329,7 +333,7 @@ impl Builder {
             .build_overrides
             .as_ref()
             .and_then(|overrides| overrides.debug)
-            .unwrap_or(self.config.build.debug)
+            .unwrap_or(self.build_profile().debug)
         {
             extra_args.push("-g".to_string());
         }
@@ -338,7 +342,7 @@ impl Builder {
             .build_overrides
             .as_ref()
             .and_then(|overrides| overrides.warnings_as_errors)
-            .unwrap_or(self.config.build.warnings_as_errors)
+            .unwrap_or(self.build_profile().warnings_as_errors)
         {
             extra_args.push("-Werror".to_string());
         }
@@ -356,7 +360,7 @@ impl Builder {
             .arg("-o")
             .arg(obj);
 
-        if self.config.build.output_compile_commands {
+        if self.config.workspace.output_compile_commands {
             let command_str = command.to_string();
             let args: Vec<_> = command_str.split_whitespace().map(String::from).collect();
 
@@ -378,7 +382,7 @@ impl Builder {
     }
 
     fn write_build_artifacts(&self) -> Result<()> {
-        let build_dir = self.base_dir.join(&self.config.build.build_dir);
+        let build_dir = self.base_dir.join(&self.config.workspace.build_dir);
         let compile_commands_path = build_dir.join("compile_commands.json");
         let compile_commands_vec: Vec<CompileCommand> = self
             .compile_commands
@@ -402,7 +406,7 @@ impl Builder {
     }
 }
 
-pub fn build(args: &Args, opts: BuildOpts) -> Result<()> {
+pub fn build(args: &Args, opts: &BuildOpts) -> Result<()> {
     let base_dir = args
         .opts
         .config
@@ -413,7 +417,7 @@ pub fn build(args: &Args, opts: BuildOpts) -> Result<()> {
     let config = Config::load(&args.opts.config)?;
     log::debug!("Loaded config: {:#?}", config);
 
-    Builder::new(args, config, opts, &base_dir)?.build()?;
+    Builder::new(args, &config, opts, &base_dir)?.build()?;
 
     Ok(())
 }

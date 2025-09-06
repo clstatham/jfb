@@ -3,9 +3,9 @@ use xshell::cmd;
 
 use crate::{commands::build::Builder, config::DependencyConfig};
 
-impl Builder {
+impl<'a> Builder<'a> {
     pub fn download_dependency(&self, dep_name: &str, dep: &DependencyConfig) -> Result<()> {
-        let dep_dir = self.base_dir.join(&self.config.build.dep_dir);
+        let dep_dir = self.base_dir.join(&self.config.workspace.dep_dir);
         if !dep_dir.exists() {
             self.sh.create_dir(&dep_dir)?;
         }
@@ -38,7 +38,7 @@ impl Builder {
     }
 
     pub fn build_dependency(&self, dep_name: &str, dep: &DependencyConfig) -> Result<()> {
-        let dep_dir = self.base_dir.join(&self.config.build.dep_dir);
+        let dep_dir = self.base_dir.join(&self.config.workspace.dep_dir);
         let target_path = dep_dir.join(dep_name);
         if !target_path.exists() {
             return Err(anyhow::anyhow!(
