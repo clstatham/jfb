@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::Mutex,
     time::SystemTime,
 };
 
@@ -26,8 +27,10 @@ pub struct CompileCommand {
     pub file: String,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileUpdateCache {
+    last_build_profile: String,
+
     #[serde(flatten)]
     cache: HashMap<PathBuf, SystemTime>,
 }
@@ -58,8 +61,8 @@ pub struct Builder<'a> {
     opts: &'a BuildOpts,
     sh: Shell,
     base_dir: PathBuf,
-    compile_commands: HashMap<PathBuf, CompileCommand>,
-    file_cache: FileUpdateCache,
+    compile_commands: Mutex<HashMap<PathBuf, CompileCommand>>,
+    file_cache: Mutex<FileUpdateCache>,
     config_updated: bool,
 }
 
@@ -106,8 +109,8 @@ impl<'a> Builder<'a> {
             opts,
             sh,
             base_dir,
-            compile_commands,
-            file_cache,
+            compile_commands: Mutex::new(compile_commands),
+            file_cache: Mutex::new(file_cache),
             config_updated,
         })
     }
@@ -116,7 +119,14 @@ impl<'a> Builder<'a> {
         &self.config.build_profiles[&self.opts.profile]
     }
 
-    pub fn build(mut self) -> Result<()> {
+    pub fn should_recompile(&self, path: &Path) -> Result<bool> {
+        let mut file_cache = self.file_cache.lock().unwrap();
+        Ok(self.config_updated
+            || file_cache.last_build_profile != self.opts.profile
+            || file_cache.is_updated(path)?)
+    }
+
+    pub fn build(self) -> Result<()> {
         let build_dir = self.base_dir.join(&self.config.workspace.build_dir);
         self.sh.create_dir(&build_dir)?;
         log::debug!("Using build directory: {}", build_dir.display());
@@ -125,26 +135,22 @@ impl<'a> Builder<'a> {
         self.fetch_dependencies()?;
         self.build_dependencies()?;
 
-        let targets = self.config.targets.clone();
         // compile every target
-        for target in targets {
+        for target in &self.config.targets {
             log::info!("Building target: {}", target.name);
-
-            self.compile_target(&target, &build_dir)?;
+            self.compile_target(target, &build_dir)?;
         }
 
-        if self.config.workspace.output_compile_commands {
-            self.write_build_artifacts()?;
-        }
+        self.write_build_artifacts()?;
 
         log::info!("All targets built successfully.");
 
         Ok(())
     }
 
-    fn compile_target(&mut self, target: &TargetConfig, build_dir: &Path) -> Result<()> {
+    fn compile_target(&self, target: &TargetConfig, build_dir: &Path) -> Result<()> {
         // create output directory for this target
-        let out_dir = build_dir.join(&target.name);
+        let out_dir = build_dir.join(&self.opts.profile).join(&target.name);
         self.sh.create_dir(&out_dir)?;
 
         let mut src_files = vec![];
@@ -181,7 +187,7 @@ impl<'a> Builder<'a> {
         // compile our source files
         for (src, obj) in src_files.iter().zip(obj_files.iter()) {
             // check if the file has been updated compared to our cached update time
-            if self.config_updated || self.file_cache.is_updated(src)? {
+            if self.should_recompile(src)? {
                 self.compile_file(src, obj, target)?;
             } else {
                 log::debug!("Skipping unchanged file: {}", src.display());
@@ -250,7 +256,7 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    fn compile_file(&mut self, src: &Path, obj: &Path, target: &TargetConfig) -> Result<()> {
+    fn compile_file(&self, src: &Path, obj: &Path, target: &TargetConfig) -> Result<()> {
         let compiler = match target.language {
             TargetLanguage::C => target
                 .build_overrides
@@ -360,19 +366,19 @@ impl<'a> Builder<'a> {
             .arg("-o")
             .arg(obj);
 
-        if self.config.workspace.output_compile_commands {
-            let command_str = command.to_string();
-            let args: Vec<_> = command_str.split_whitespace().map(String::from).collect();
+        let command_str = command.to_string();
+        let args: Vec<_> = command_str.split_whitespace().map(String::from).collect();
 
-            let compile_command = CompileCommand {
-                directory: self.base_dir.to_string_lossy().into_owned(),
-                arguments: args,
-                file: src.to_string_lossy().into_owned(),
-            };
+        let compile_command = CompileCommand {
+            directory: self.base_dir.to_string_lossy().into_owned(),
+            arguments: args,
+            file: src.to_string_lossy().into_owned(),
+        };
 
-            self.compile_commands
-                .insert(src.to_path_buf(), compile_command);
-        }
+        self.compile_commands
+            .lock()
+            .unwrap()
+            .insert(src.to_path_buf(), compile_command);
 
         command.quiet().run()?;
 
@@ -386,6 +392,8 @@ impl<'a> Builder<'a> {
         let compile_commands_path = build_dir.join("compile_commands.json");
         let compile_commands_vec: Vec<CompileCommand> = self
             .compile_commands
+            .lock()
+            .unwrap()
             .values()
             .map(ToOwned::to_owned)
             .collect();
@@ -397,7 +405,10 @@ impl<'a> Builder<'a> {
             compile_commands_path.display()
         );
 
-        let file_update_cache_json = serde_json::to_string_pretty(&self.file_cache)?;
+        let mut file_cache = self.file_cache.lock().unwrap().clone();
+        file_cache.last_build_profile = self.opts.profile.clone();
+
+        let file_update_cache_json = serde_json::to_string_pretty(&file_cache)?;
         let cache_path = build_dir.join("jfb_cache.json");
         self.sh.write_file(&cache_path, file_update_cache_json)?;
         log::debug!("Wrote file cache to {}", cache_path.display());
@@ -407,11 +418,13 @@ impl<'a> Builder<'a> {
 }
 
 pub fn build(args: &Args, opts: &BuildOpts) -> Result<()> {
+    let cwd = std::env::current_dir()?;
     let base_dir = args
         .opts
         .config
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
+        .map(|p| cwd.join(p))
+        .unwrap_or(cwd);
     let base_dir = base_dir.canonicalize()?;
 
     let config = Config::load(&args.opts.config)?;

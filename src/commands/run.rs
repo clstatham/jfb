@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use crate::config::{Args, Config, TargetType};
 use anyhow::Result;
 use xshell::{Shell, cmd};
@@ -10,13 +8,16 @@ pub fn run(args: &Args, build_opts: &BuildOpts) -> Result<()> {
     // build first
     crate::commands::build::build(args, build_opts)?;
 
+    let cwd = std::env::current_dir()?;
     let config_path = &args.opts.config;
-    let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let base_dir = config_path.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
 
     let base_dir = base_dir.canonicalize()?;
     let config = Config::load(config_path)?;
 
-    let build_dir = base_dir.join(&config.workspace.build_dir);
+    let build_dir = base_dir
+        .join(&config.workspace.build_dir)
+        .join(&build_opts.profile);
     let executable = config
         .targets
         .iter()

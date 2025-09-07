@@ -62,10 +62,10 @@ impl<'a> Builder<'a> {
         for flag in &self.build_profile().cmake_flags {
             cmake_cmd = cmake_cmd.arg(flag);
         }
-        cmake_cmd.run()?;
+        cmake_cmd.quiet().run()?;
 
         log::info!("Building dependency `{}`", dep_name);
-        cmd!(self.sh, "cmake --build .").run()?;
+        cmd!(self.sh, "cmake --build .").quiet().run()?;
 
         Ok(())
     }

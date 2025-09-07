@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::Result;
 
 use clap::Parser;
@@ -8,7 +10,15 @@ pub mod commands;
 pub mod config;
 
 fn main() -> Result<()> {
-    env_logger::try_init_from_env("JFB_LOG_LEVEL")?;
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .parse_env("JFB_LOG_LEVEL")
+        .format_timestamp(None)
+        .format_file(false)
+        .format_module_path(false)
+        .format_target(false)
+        .format_level(true)
+        .init();
 
     let args = Args::parse();
 

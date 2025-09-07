@@ -112,9 +112,6 @@ pub struct WorkspaceConfig {
 
     /// Directory to store dependency source code
     pub dep_dir: PathBuf,
-
-    /// Whether to output a `compile_commands.json` file
-    pub output_compile_commands: bool,
 }
 
 impl Default for WorkspaceConfig {
@@ -123,7 +120,6 @@ impl Default for WorkspaceConfig {
             name: "myproject".to_string(),
             build_dir: PathBuf::from("build"),
             dep_dir: PathBuf::from("deps"),
-            output_compile_commands: true,
         }
     }
 }
